@@ -1,0 +1,10 @@
+replicaCount: 1
+image:
+  repository: 000000000000.dkr.ecr.ap-south-1.amazonaws.com/gitops-demo
+  tag: bootstrap-required
+  pullPolicy: IfNotPresent
+containerPort: 8080
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: http

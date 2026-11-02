@@ -1,0 +1,39 @@
+nameOverride: ""
+fullnameOverride: ""
+replicaCount: 1
+revisionHistoryLimit: 3
+
+image:
+  repository: nginxinc/nginx-unprivileged
+  tag: "1.27-alpine"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+podAnnotations: {}
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: http
+
+resources: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  fsGroup: 101
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+probes:
+  readiness:
+    path: /
+    initialDelaySeconds: 2
+    periodSeconds: 5
+  liveness:
+    path: /
+    initialDelaySeconds: 10
+    periodSeconds: 10

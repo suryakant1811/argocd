@@ -1,0 +1,222 @@
+pipeline {
+  agent any
+
+  options {
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+    skipDefaultCheckout(true)
+    timestamps()
+  }
+
+  parameters {
+    string(name: 'AWS_REGION', defaultValue: 'ap-south-1')
+    string(name: 'ECR_REPOSITORY', defaultValue: 'gitops-demo')
+    string(name: 'ARTIFACT_BUCKET', defaultValue: '')
+    string(name: 'DEPLOY_BRANCH', defaultValue: 'main')
+    string(name: 'GIT_CREDENTIALS_ID', defaultValue: 'github-pat')
+  }
+
+  environment {
+    PROJECT_DIR = 'gitops-demo'
+    IMAGE_VALUES_FILE = 'gitops-demo/helm-values/prod/values.yaml'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        script {
+          env.GIT_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+          env.SHORT_SHA = env.GIT_SHA.take(12)
+          env.LAST_MESSAGE = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+          env.SKIP_GITOPS_BUILD = env.LAST_MESSAGE.contains('[gitops-skip]') ? 'true' : 'false'
+        }
+      }
+    }
+
+    stage('Generated GitOps commit') {
+      when { expression { env.SKIP_GITOPS_BUILD == 'true' } }
+      steps {
+        echo 'Values-only commit detected; image build is skipped.'
+      }
+    }
+
+    stage('Validate') {
+      when { expression { env.SKIP_GITOPS_BUILD != 'true' } }
+      steps {
+        sh '''
+          set -eu
+          test -n "$ARTIFACT_BUCKET" || {
+            echo "ARTIFACT_BUCKET is required." >&2
+            exit 1
+          }
+          for command in aws docker git helm python3 curl tar sha256sum; do
+            command -v "$command" >/dev/null
+          done
+          aws sts get-caller-identity >/dev/null
+          helm lint "$PROJECT_DIR/helm-chart/application" \
+            -f "$PROJECT_DIR/helm-values/common/resources.yaml" \
+            -f "$PROJECT_DIR/helm-values/prod/values.yaml"
+          mkdir -p "$PROJECT_DIR/build"
+          helm template gitops-demo "$PROJECT_DIR/helm-chart/application" \
+            -f "$PROJECT_DIR/helm-values/common/resources.yaml" \
+            -f "$PROJECT_DIR/helm-values/prod/values.yaml" \
+            > "$PROJECT_DIR/build/rendered-manifests.yaml"
+        '''
+        script {
+          env.AWS_ACCOUNT_ID = sh(
+            script: 'aws sts get-caller-identity --query Account --output text',
+            returnStdout: true
+          ).trim()
+          env.ECR_REGISTRY = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
+          env.IMAGE_REPOSITORY = "${env.ECR_REGISTRY}/${params.ECR_REPOSITORY}"
+          env.IMAGE_URI = "${env.IMAGE_REPOSITORY}:${env.GIT_SHA}"
+          env.ARTIFACT_NAME = "gitops-demo-${env.BUILD_NUMBER}-${env.SHORT_SHA}.tar.gz"
+        }
+      }
+    }
+
+    stage('Package artifact') {
+      when { expression { env.SKIP_GITOPS_BUILD != 'true' } }
+      steps {
+        sh '''
+          set -eu
+          mkdir -p "$PROJECT_DIR/build/site"
+          cp -R "$PROJECT_DIR/app/." "$PROJECT_DIR/build/site/"
+          python3 - <<'PY'
+import json, os
+from pathlib import Path
+data = {
+    "build_number": os.environ["BUILD_NUMBER"],
+    "git_sha": os.environ["GIT_SHA"],
+    "job_name": os.environ["JOB_NAME"],
+}
+(Path(os.environ["PROJECT_DIR"]) / "build/build-info.json").write_text(
+    json.dumps(data, indent=2) + "\\n", encoding="utf-8"
+)
+PY
+          tar -czf "$PROJECT_DIR/build/$ARTIFACT_NAME" \
+            -C "$PROJECT_DIR/build" site build-info.json
+          sha256sum "$PROJECT_DIR/build/$ARTIFACT_NAME" \
+            > "$PROJECT_DIR/build/$ARTIFACT_NAME.sha256"
+        '''
+        archiveArtifacts(
+          artifacts: 'gitops-demo/build/*',
+          fingerprint: true
+        )
+      }
+    }
+
+    stage('Build and smoke test') {
+      when { expression { env.SKIP_GITOPS_BUILD != 'true' } }
+      steps {
+        sh '''
+          set -eu
+          cd "$PROJECT_DIR"
+          docker build --pull \
+            --label "org.opencontainers.image.revision=$GIT_SHA" \
+            -t "$IMAGE_URI" .
+          name="gitops-demo-smoke-$BUILD_NUMBER"
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$name" -p 127.0.0.1::8080 "$IMAGE_URI" >/dev/null
+          attempt=1
+          while [ "$attempt" -le 30 ]; do
+            port="$(docker port "$name" 8080/tcp | awk -F: 'NR == 1 {print $NF}')"
+            if [ -n "$port" ] && curl -fsS "http://127.0.0.1:$port/" |
+              grep -q "Jenkins to Argo CD GitOps demo"; then
+              echo "Smoke test passed."
+              exit 0
+            fi
+            attempt=$((attempt + 1))
+            sleep 2
+          done
+          docker logs "$name"
+          exit 1
+        '''
+      }
+    }
+
+    stage('Upload artifact to S3') {
+      when { expression { env.SKIP_GITOPS_BUILD != 'true' } }
+      steps {
+        sh '''
+          set -eu
+          prefix="s3://$ARTIFACT_BUCKET/gitops-demo/$GIT_SHA"
+          aws s3 cp "$PROJECT_DIR/build/$ARTIFACT_NAME" \
+            "$prefix/$ARTIFACT_NAME" --region "$AWS_REGION" --sse AES256
+          aws s3 cp "$PROJECT_DIR/build/$ARTIFACT_NAME.sha256" \
+            "$prefix/$ARTIFACT_NAME.sha256" --region "$AWS_REGION" --sse AES256
+          aws s3 cp "$PROJECT_DIR/build/build-info.json" \
+            "$prefix/build-info.json" --region "$AWS_REGION" --sse AES256
+        '''
+      }
+    }
+
+    stage('Push image to ECR') {
+      when { expression { env.SKIP_GITOPS_BUILD != 'true' } }
+      steps {
+        sh '''
+          set -eu
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          if aws ecr describe-images --region "$AWS_REGION" \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$GIT_SHA" >/dev/null 2>&1; then
+            echo "Immutable image already exists."
+          else
+            docker push "$IMAGE_URI"
+          fi
+        '''
+      }
+    }
+
+    stage('Update GitOps values') {
+      when { expression { env.SKIP_GITOPS_BUILD != 'true' } }
+      steps {
+        script {
+          withCredentials([usernamePassword(
+            credentialsId: params.GIT_CREDENTIALS_ID,
+            usernameVariable: 'GIT_USERNAME',
+            passwordVariable: 'GIT_TOKEN'
+          )]) {
+            sh '''
+              set -eu
+              git fetch origin "$DEPLOY_BRANCH"
+              git checkout -B "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
+              python3 "$PROJECT_DIR/scripts/update-image-values.py" \
+                "$IMAGE_REPOSITORY" "$GIT_SHA" --file "$IMAGE_VALUES_FILE"
+              if git diff --quiet -- "$IMAGE_VALUES_FILE"; then exit 0; fi
+              git config user.name jenkins-gitops
+              git config user.email jenkins-gitops@users.noreply.github.com
+              git add "$IMAGE_VALUES_FILE"
+              git commit -m "Deploy gitops-demo $SHORT_SHA [gitops-skip]"
+              askpass="$(mktemp)"
+              trap 'rm -f "$askpass"' EXIT
+              cat > "$askpass" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\\n' "$GIT_USERNAME" ;;
+  *Password*) printf '%s\\n' "$GIT_TOKEN" ;;
+esac
+EOF
+              chmod 700 "$askpass"
+              GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \
+                git push origin "HEAD:$DEPLOY_BRANCH"
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      script {
+        if (env.IMAGE_URI?.trim()) {
+          sh 'docker image rm "$IMAGE_URI" >/dev/null 2>&1 || true'
+        }
+      }
+      deleteDir()
+    }
+  }
+}

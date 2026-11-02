@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitops-demo-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  ignoreDifferences:
+    - kind: Service
+      jsonPointers:
+        - /spec/clusterIP
+        - /spec/clusterIPs
+  sources:
+    - repoURL: https://github.com/suryakant1811/argocd.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/suryakant1811/argocd.git
+      targetRevision: main
+      path: gitops-demo/helm-chart/application
+      helm:
+        releaseName: gitops-demo
+        valueFiles:
+          - $values/gitops-demo/helm-values/common/resources.yaml
+          - $values/gitops-demo/helm-values/prod/values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

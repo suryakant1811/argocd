@@ -1,0 +1,8 @@
+.git
+build
+aws
+argocd
+helm-chart
+helm-values
+Jenkinsfile
+README.md

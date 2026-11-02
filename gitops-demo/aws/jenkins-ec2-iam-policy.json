@@ -1,0 +1,42 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DiscoverAwsAccount",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AuthenticateToEcr",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PushGitOpsDemoImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:CompleteLayerUpload",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:REPLACE_WITH_REGION:REPLACE_WITH_ACCOUNT_ID:repository/gitops-demo"
+    },
+    {
+      "Sid": "ListArtifactBucket",
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation", "s3:ListBucket"],
+      "Resource": "arn:aws:s3:::REPLACE_WITH_ARTIFACT_BUCKET"
+    },
+    {
+      "Sid": "ManageBuildArtifacts",
+      "Effect": "Allow",
+      "Action": ["s3:AbortMultipartUpload", "s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::REPLACE_WITH_ARTIFACT_BUCKET/gitops-demo/*"
+    }
+  ]
+}

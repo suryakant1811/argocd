@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image:
+  repository: suryasuraj/prod
+  tag: "1.0"
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: http
+
+containerPort: 80

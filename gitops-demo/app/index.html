@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GitOps Production Demo</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #0f172a; color: #e2e8f0; }
+      main { width: min(42rem, calc(100% - 3rem)); padding: 2.5rem; border: 1px solid #334155; border-radius: 1rem; background: #1e293b; }
+      .environment { color: #38bdf8; font-size: .85rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="environment">Production</p>
+      <h1>Jenkins to Argo CD GitOps demo</h1>
+      <p>My name is Suryakant, and I am learning production GitOps.</p>
+      <p>This image was built by Jenkins, stored in ECR, and deployed to EKS by Argo CD.</p>
+    </main>
+  </body>
+</html>

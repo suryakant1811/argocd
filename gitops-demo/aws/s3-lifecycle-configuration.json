@@ -1,0 +1,12 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-old-build-artifacts",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "gitops-demo/" },
+      "Expiration": { "Days": 90 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

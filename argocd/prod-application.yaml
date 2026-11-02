@@ -1,0 +1,45 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  ignoreDifferences:
+    - kind: Service
+      jsonPointers:
+        - /spec/clusterIP
+        - /spec/clusterIPs
+  sources:
+    - repoURL: https://github.com/suryakant1811/argocd.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/suryakant1811/argocd.git
+      targetRevision: main
+      path: helm-chart/application
+      helm:
+        releaseName: prod
+        valueFiles:
+          - $values/helm-values/common/resources-small.yaml
+          - $values/helm-values/prod/prod-app/values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
